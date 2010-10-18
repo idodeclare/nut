@@ -25,8 +25,17 @@
 #include <stdio.h>
 #include "common.h"
 #include <sys/types.h>
+#ifndef WIN32
 #include <sys/socket.h>
 #include <netdb.h>
+#else
+/* Those 2 files for support of getaddrinfo, getnameinfo and freeaddrinfo
+   on Windows 2000 and older versions */
+#include <ws2tcpip.h>
+#include <wspiapi.h>
+#define AI_NUMERICSERV NI_NUMERICSERV
+#include "wincompat.h"
+#endif
 
 static void increment_IPv6(struct in6_addr * addr)
 {

@@ -36,7 +36,13 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef WIN32
 #include <syslog.h>
+#else
+#include <winsock2.h>
+#include <windows.h>
+#include <ws2tcpip.h>
+#endif
 #include <unistd.h>
 #include <assert.h>
 
@@ -49,6 +55,23 @@
 /* *INDENT-OFF* */
 extern "C" {
 /* *INDENT-ON* */
+#endif
+
+#ifdef WIN32
+typedef struct serial_handler_s {
+	HANDLE handle;
+	OVERLAPPED io_status;
+	int     overlapped_armed;
+
+	unsigned int vmin_;
+	unsigned int vtime_;
+	unsigned int r_binary;
+	unsigned int w_binary;
+} serial_handler_t;
+
+/* difftime returns erroneous value so we use this macro.*/
+#undef difftime
+#define difftime(t1,t0) (double)(t1 - t0)
 #endif
 
 extern const char *UPS_VERSION;
@@ -72,13 +95,21 @@ void chroot_start(const char *path);
 void writepid(const char *name);
 
 /* send a signal to another running process */
+#ifndef WIN32
 int sendsignal(const char *progname, int sig);
+#else
+int sendsignal(const char *progname, const char * sig);
+#endif
 
 int snprintfcat(char *dst, size_t size, const char *fmt, ...)
 	__attribute__ ((__format__ (__printf__, 3, 4)));
 
+#ifndef WIN32
 /* open <pidfn>, get the pid, then send it <sig> */
 int sendsignalfn(const char *pidfn, int sig);
+#else
+int sendsignalfn(const char *pidfn, const char * sig);
+#endif
 
 const char *xbasename(const char *file);
 
@@ -119,7 +150,11 @@ void *xcalloc(size_t number, size_t size);
 void *xrealloc(void *ptr, size_t size);
 char *xstrdup(const char *string);
 
+#ifndef WIN32
 int select_read(const int fd, void *buf, const size_t buflen, const long d_sec, const long d_usec);
+#else
+int select_read(serial_handler_t * fd, void *buf, const size_t buflen, const long d_sec, const long d_usec);
+#endif
 int select_write(const int fd, const void *buf, const size_t buflen, const long d_sec, const long d_usec);
 
 /* Buffer sizes used for various functions */
@@ -154,5 +189,35 @@ extern int optind;
 }
 /* *INDENT-ON* */
 #endif
+
+#ifdef WIN32
+/* FIXME : this might not be the optimal mapping between syslog and ReportEvent*/
+#define LOG_ERR 	EVENTLOG_ERROR_TYPE
+#define LOG_INFO 	EVENTLOG_INFORMATION_TYPE
+#define LOG_DEBUG	EVENTLOG_WARNING_TYPE
+#define LOG_NOTICE	EVENTLOG_INFORMATION_TYPE
+#define LOG_ALERT	EVENTLOG_ERROR_TYPE
+#define LOG_WARNING	EVENTLOG_WARNING_TYPE
+#define LOG_CRIT	EVENTLOG_ERROR_TYPE
+#define LOG_EMERG	EVENTLOG_ERROR_TYPE
+
+#define closelog()
+
+#define SVCNAME TEXT("Network UPS Tools")
+#define EVENTLOG_PIPE_NAME TEXT("nut")
+#define UPSMON_PIPE_NAME TEXT("upsmon")
+#define UPSD_PIPE_NAME TEXT("upsd")
+
+char * getfullpath(char * relative_path);
+#define PATH_ETC	"\\..\\etc"
+#define PATH_VAR_RUN "\\..\\var\\run"
+#define PATH_SHARE "\\..\\share"
+#define PATH_BIN "\\..\\bin"
+#define PATH_SBIN "\\..\\sbin"
+#endif /* WIN32*/
+
+#ifndef HAVE_USLEEP
+int __cdecl usleep(unsigned int useconds);
+#endif /* HAVE_USLEEP */
 
 #endif /* NUT_COMMON_H */

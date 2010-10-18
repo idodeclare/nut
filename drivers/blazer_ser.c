@@ -131,6 +131,7 @@ void upsdrv_initups(void)
 
 	const char	*val;
 
+#ifndef WIN32 /* TODO : Correctly set the port parameters for WIN32 */
 	struct termios		tio;
 
 	/*
@@ -181,7 +182,8 @@ void upsdrv_initups(void)
 	 * Allow some time to settle for the cablepower
 	 */
 	usleep(100000);
-#endif
+#endif /* WIN32 */
+#endif /* TESTING */
 	blazer_initups();
 }
 

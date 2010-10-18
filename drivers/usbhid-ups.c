@@ -29,11 +29,15 @@
 #define DRIVER_NAME	"Generic HID driver"
 #define DRIVER_VERSION		"0.41"
 
+#include "win_shut_compat.h"
 #include "main.h"
 #include "libhid.h"
 #include "usbhid-ups.h"
 #include "hidparser.h"
 #include "hidtypes.h"
+#ifdef WIN32
+#include "wincompat.h"
+#endif
 
 /* include all known subdrivers */
 #include "mge-hid.h"
@@ -112,7 +116,7 @@ bool_t use_interrupt_pipe = TRUE;
 bool_t use_interrupt_pipe = FALSE;
 #endif
 static time_t lastpoll; /* Timestamp the last polling */
-hid_dev_handle_t udev;
+TYPE_FD udev;
 
 /* support functions */
 static hid_info_t *find_nut_info(const char *varname);
@@ -125,7 +129,7 @@ static void ups_status_set(void);
 static bool_t hid_ups_walk(walkmode_t mode);
 static int reconnect_ups(void);
 static int ups_infoval_set(hid_info_t *item, double value);
-static int callback(hid_dev_handle_t udev, HIDDevice_t *hd, unsigned char *rdbuf, int rdlen);
+static int callback(TYPE_FD udev, HIDDevice_t *hd, unsigned char *rdbuf, int rdlen);
 #ifdef DEBUG
 static double interval(void);
 #endif
@@ -152,7 +156,7 @@ typedef enum {
 	BYPASSAUTO,	/* on automatic bypass */
 	BYPASSMAN,	/* on manual/service bypass */
 	OFF,		/* ups is off */
-	CAL,		/* calibration */
+	CALIB,		/* calibration */
 	OVERHEAT,	/* overheat; Belkin, TrippLite */
 	COMMFAULT,	/* UPS fault; Belkin, TrippLite */
 	DEPLETED,	/* battery depleted; Belkin */
@@ -195,7 +199,7 @@ static status_lkp_t status_info[] = {
 	{ "bypassauto", STATUS(BYPASSAUTO) },
 	{ "bypassman", STATUS(BYPASSMAN) },
 	{ "off", STATUS(OFF) },
-	{ "cal", STATUS(CAL) },
+	{ "cal", STATUS(CALIB) },
 	{ "overheat", STATUS(OVERHEAT) },
 	{ "commfault", STATUS(COMMFAULT) },
 	{ "depleted", STATUS(DEPLETED) },
@@ -1088,7 +1092,7 @@ static void process_boolean_info(const char *nutvalue)
 	upsdebugx(5, "Warning: %s not in list of known values", nutvalue);
 }
 
-static int callback(hid_dev_handle_t udev, HIDDevice_t *hd, unsigned char *rdbuf, int rdlen)
+static int callback(TYPE_FD udev, HIDDevice_t *hd, unsigned char *rdbuf, int rdlen)
 {
 	int i;
 	const char *mfr = NULL, *model = NULL, *serial = NULL;
@@ -1314,6 +1318,9 @@ static bool_t hid_ups_walk(walkmode_t mode)
 			continue;
 
 		case -ETIMEDOUT:	/* Connection timed out */
+/* libusb win32 does not know EPROTO and EOVERFLOW, it only returns EIO for any
+   IO errors */
+#ifndef WIN32
 		case -EOVERFLOW:	/* Value too large for defined data type */
 #ifdef EPROTO
 		case -EPROTO:		/* Protocol error */
@@ -1472,7 +1479,7 @@ static void ups_status_set(void)
 	if (ups_status & STATUS(OFF)) {
 		status_set("OFF");		/* ups is off */
 	}
-	if (ups_status & STATUS(CAL)) {
+	if (ups_status & STATUS(CALIB)) {
 		status_set("CAL");		/* calibration */
 	}
 }

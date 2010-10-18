@@ -547,35 +547,46 @@ int shut_wait_ack (void)
 static int char_read (char *bytes, int size, int read_timeout)
 {
 	struct timeval serial_timeout;
-	fd_set readfs;
-	int readen = 0;
-	int rc = 0;
-
-	FD_ZERO (&readfs);
-	FD_SET (upsfd, &readfs);
+	int bytes_read = 0;
+	int now;
 
 	serial_timeout.tv_usec = (read_timeout % 1000) * 1000;
 	serial_timeout.tv_sec = (read_timeout / 1000);
+
+#ifndef WIN32
+	fd_set readfs;
+	int rc = 0;
+	FD_ZERO (&readfs);
+	FD_SET (upsfd, &readfs);
 
 	rc = select (upsfd + 1, &readfs, NULL, NULL, &serial_timeout);
 	if (0 == rc)
 		return -2;			/* timeout */
 
 	if (FD_ISSET (upsfd, &readfs)) {
-		int now = read (upsfd, bytes, size - readen);
+		now = read (upsfd, bytes, size - bytes_read);
 
 		if (now < 0) {
 			return -1;
 		}
 		else {
 			bytes += now;
-			readen += now;
+			bytes_read += now;
 		}
 	}
 	else {
 		return -1;
 	}
-	return readen;
+#else
+	now = select_read(upsfd,bytes,size - bytes_read, serial_timeout.tv_sec, serial_timeout.tv_usec);
+	if( now == -1 ) {
+		return -1;
+	}
+	bytes += now;
+	bytes_read += now;
+
+#endif
+	return bytes_read;
 }
 
 /**********************************************************************
@@ -1137,9 +1148,9 @@ int hid_init_device()
 }
 
 /* translate HID string path to numeric path and return path depth */
-ushort lookup_path(const char *HIDpath, HIDData_t *data)
+unsigned short lookup_path(const char *HIDpath, HIDData_t *data)
 {
-	ushort i = 0, cond = 1;
+	unsigned short i = 0, cond = 1;
 	int cur_usage;
 	char buf[MAX_STRING];
 	char *start, *end;

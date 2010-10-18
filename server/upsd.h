@@ -31,9 +31,11 @@
 
 #include "common.h"
 
+#ifndef WIN32
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#endif
 
 #include "timehead.h"
 
@@ -76,9 +78,13 @@ extern upstype_t	*firstups;
 extern nut_ctype_t	*firstclient;
 
 /* map commands onto signals */
-
+#ifndef WIN32
 #define SIGCMD_STOP	SIGTERM
 #define SIGCMD_RELOAD	SIGHUP
+#else
+#define SIGCMD_STOP    COMMAND_STOP
+#define SIGCMD_RELOAD  COMMAND_RELOAD
+#endif
 
 /* awkward way to make a string out of a numeric constant */
 

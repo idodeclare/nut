@@ -84,6 +84,11 @@ const char * get_libname(const char* base_libname)
 	return libname_path;
 }
 
+#ifdef WIN32
+/* Stub for libupsclient */
+void do_upsconf_args(char *confupsname, char *var, char *val) {;};
+#endif
+
 void nutscan_init(void)
 {
 #ifdef WITH_USB

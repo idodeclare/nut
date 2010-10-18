@@ -22,22 +22,37 @@
 #include "config.h"	/* safe because it doesn't contain prototypes */
 #include "nut_platform.h"
 
+#ifndef WIN32
 #ifdef HAVE_PTHREAD
 /* this include is needed on AIX to have errno stored in thread local storage */
 #include <pthread.h>
 #endif 
+#endif
 
 #include <errno.h>
-#include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifndef WIN32
+#include <netdb.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <sys/time.h>
+#define SOCK_OPT_CAST
+#else
+#define SOCK_OPT_CAST (char *)
+/* Those 2 files for support of getaddrinfo, getnameinfo and freeaddrinfo
+   on Windows 2000 and older versions */
+#include <ws2tcpip.h>
+#include <wspiapi.h>
+/* This override network system calls to adapt to Windows specificity */
+#define W32_NETWORK_CALL_OVERRIDE
+#include "wincompat.h"
+#undef W32_NETWORK_CALL_OVERRIDE
+#endif
 
 #include "upsclient.h"
 #include "common.h"
@@ -856,8 +871,16 @@ int upscli_tryconnect(UPSCONN_t *ups, const char *host, int port, int flags,stru
 	fd_set 			wfds;
 	int			error;
 	socklen_t		error_size;
-	long			fd_flags;
 
+#ifndef WIN32
+	long			fd_flags;
+#else
+	HANDLE event = NULL;
+	unsigned long argp;
+
+	WSADATA WSAdata;
+	WSAStartup(2,&WSAdata);
+#endif
 	if (!ups) {
 		return -1;
 	}
@@ -926,13 +949,30 @@ int upscli_tryconnect(UPSCONN_t *ups, const char *host, int port, int flags,stru
 
 		/* non blocking connect */
 		if(timeout != NULL) {
+#ifndef WIN32
 			fd_flags = fcntl(sock_fd, F_GETFL);
 			fd_flags |= O_NONBLOCK;
 			fcntl(sock_fd, F_SETFL, fd_flags);
 		}
 
+#else
+			event = CreateEvent(NULL, /* Security */
+					FALSE, /* auto-reset */
+					FALSE, /* initial state */
+					NULL); /* no name */
+
+		/* Associate socket event to the socket via its Event object */
+			WSAEventSelect( sock_fd, event, FD_CONNECT );
+			CloseHandle(event);
+		}
+#endif
+
 		while ((v = connect(sock_fd, ai->ai_addr, ai->ai_addrlen)) < 0) {
+#ifndef WIN32
 			if(errno == EINPROGRESS || SOLARIS_i386_NBCONNECT_ENOENT(errno) || AIX_NBCONNECT_0(errno)) {
+#else
+			if(errno == WSAEWOULDBLOCK) {
+#endif
 				FD_ZERO(&wfds);
 				FD_SET(sock_fd, &wfds);
 				select(sock_fd+1,NULL,&wfds,NULL,
@@ -940,7 +980,7 @@ int upscli_tryconnect(UPSCONN_t *ups, const char *host, int port, int flags,stru
 				if (FD_ISSET(sock_fd, &wfds)) {
 					error_size = sizeof(error);
 					getsockopt(sock_fd,SOL_SOCKET,SO_ERROR,
-							&error,&error_size);
+							SOCK_OPT_CAST&error,&error_size);
 					if( error == 0) {
 						/* connect successful */
 						v = 0;
@@ -976,9 +1016,14 @@ int upscli_tryconnect(UPSCONN_t *ups, const char *host, int port, int flags,stru
 
 		/* switch back to blocking operation */
 		if(timeout != NULL) {
+#ifndef WIN32
 			fd_flags = fcntl(sock_fd, F_GETFL);
 			fd_flags &= ~O_NONBLOCK;
 			fcntl(sock_fd, F_SETFL, fd_flags);
+#else
+			argp = 0;
+			ioctlsocket(sock_fd,FIONBIO,&argp);
+#endif
 		}
 
 		ups->fd = sock_fd;

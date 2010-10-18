@@ -19,8 +19,14 @@ endif
 
 bin_PROGRAMS = upsc upslog upsrw upscmd
 dist_bin_SCRIPTS = upssched-cmd
+if HAVE_WINDOWS_SOCKETS
+sbin_PROGRAMS = upsmon upssched message
+#TODO : port libnutclient
+lib_LTLIBRARIES = libupsclient.la
+else !HAVE_WINDOWS_SOCKETS
 sbin_PROGRAMS = upsmon upssched
 lib_LTLIBRARIES = libupsclient.la libnutclient.la
+endif !HAVE_WINDOWS_SOCKETS
 if WITH_DEV
  include_HEADERS = upsclient.h ../include/parseconf.h nutclient.h
 endif
@@ -33,6 +39,9 @@ upscmd_SOURCES = upscmd.c upsclient.h
 upsrw_SOURCES = upsrw.c upsclient.h
 upslog_SOURCES = upslog.c upsclient.h upslog.h
 upsmon_SOURCES = upsmon.c upsmon.h upsclient.h
+if HAVE_WINDOWS_SOCKETS
+message_SOURCES = message.c
+endif
 
 upssched_SOURCES = upssched.c upssched.h
 upssched_LDADD = ../common/libcommon.la ../common/libparseconf.la $(NETLIBS)
@@ -45,16 +54,22 @@ upsstats_cgi_SOURCES = upsstats.c upsclient.h status.h upsstats.h	\
  upsimagearg.h cgilib.c cgilib.h
 
 # not LDADD.
+
+# libupsclient version information
+# http://www.gnu.org/software/libtool/manual/html_node/Updating-version-info.html
+if HAVE_WINDOWS_SOCKETS
+libupsclient_la_SOURCES = upsclient.c upsclient.h ../common/wincompat.c ../common/common.c
+libupsclient_la_LIBADD = ../common/libcommonclient.la -lws2_32
+libupsclient_la_LDFLAGS = -version-info 4:0:0 -no-undefined
+else !HAVE_WINDOWS_SOCKETS
 libupsclient_la_SOURCES = upsclient.c upsclient.h
 libupsclient_la_LIBADD = ../common/libcommonclient.la
+libupsclient_la_LDFLAGS = -version-info 4:0:0
+endif !HAVE_WINDOWS_SOCKETS
+
 if WITH_SSL
   libupsclient_la_LIBADD += $(LIBSSL_LIBS)
 endif
 
-# libupsclient version information
-# http://www.gnu.org/software/libtool/manual/html_node/Updating-version-info.html
-libupsclient_la_LDFLAGS = -version-info 4:0:0
-
 libnutclient_la_SOURCES = nutclient.h nutclient.cpp
 libnutclient_la_LDFLAGS = -version-info 0:0:0
-

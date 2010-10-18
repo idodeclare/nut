@@ -26,6 +26,9 @@
 #include "libusb.h"
 #include "usb-common.h"
 #include "blazer.h"
+#ifdef WIN32
+#include "wincompat.h"
+#endif
 
 #define DRIVER_NAME	"Megatec/Q1 protocol USB driver"
 #define DRIVER_VERSION	"0.12"
@@ -451,6 +454,9 @@ int blazer_command(const char *cmd, char *buf, size_t buflen)
 		break;
 
 	case -ETIMEDOUT:	/* Connection timed out */
+/* libusb win32 does not know EPROTO and EOVERFLOW, it only returns EIO for any
+   IO errors */
+#ifndef WIN32
 	case -EOVERFLOW:	/* Value too large for defined data type */
 #ifdef EPROTO
 	case -EPROTO:		/* Protocol error */

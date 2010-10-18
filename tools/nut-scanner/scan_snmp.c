@@ -26,7 +26,12 @@
 
 #ifdef WITH_SNMP
 
+#ifndef WIN32
 #include <sys/socket.h>
+#else
+#undef _WIN32_WINNT
+#endif
+
 #include <stdio.h>
 #include <string.h>
 #include <ltdl.h>
@@ -660,6 +665,13 @@ nutscan_device_t * nutscan_scan_snmp(const char * start_ip, const char * stop_ip
 	nutscan_ip_iter_t ip;
 	char * ip_str = NULL;
 #ifdef HAVE_PTHREAD
+
+#ifdef WIN32
+        WSADATA WSAdata;
+        WSAStartup(2,&WSAdata);
+        atexit((void(*)(void))WSACleanup);
+#endif
+
 	pthread_t thread;
 	pthread_t * thread_array = NULL;
 	int thread_count = 0;

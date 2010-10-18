@@ -20,9 +20,13 @@
 #include "common.h"
 
 #include <ctype.h>
+#ifndef WIN32
 #include <syslog.h>
 #include <pwd.h>
 #include <grp.h>
+#else
+#include <wincompat.h>
+#endif
 
 /* the reason we define UPS_VERSION as a static string, rather than a
 	macro, is to make dependency tracking easier (only common.o depends
@@ -61,6 +65,7 @@ void syslogbit_set(void)
 /* get the syslog ready for us */
 void open_syslog(const char *progname)
 {
+#ifndef WIN32
 	int	opt;
 
 	opt = LOG_PID;
@@ -109,11 +114,15 @@ void open_syslog(const char *progname)
 		break;
 #endif
 	}
+#else
+	EventLogName = progname;
+#endif
 }
 
 /* close ttys and become a daemon */
 void background(void)
 {
+#ifndef WIN32
 	int	pid;
 
 	if ((pid = fork()) < 0)
@@ -145,12 +154,17 @@ void background(void)
 	setsid();		/* make a new session to dodge signals */
 #endif
 
+#else /* WIN32 */
+	xbit_set(&upslog_flags, UPSLOG_SYSLOG);
+	xbit_clear(&upslog_flags, UPSLOG_STDERR);
 	upslogx(LOG_INFO, "Startup successful");
+#endif
 }
 
 /* do this here to keep pwd/grp stuff out of the main files */
 struct passwd *get_user_pwent(const char *name)
 {
+#ifndef WIN32
 	struct passwd *r;
 	errno = 0;
 	if ((r = getpwnam(name)))
@@ -164,12 +178,14 @@ struct passwd *get_user_pwent(const char *name)
 	else
 		fatal_with_errno(EXIT_FAILURE, "getpwnam(%s)", name);
 
+#endif
 	return NULL;  /* to make the compiler happy */
 }
 
 /* change to the user defined in the struct */
 void become_user(struct passwd *pw)
 {
+#ifndef WIN32
 	/* if we can't switch users, then don't even try */
 	if ((geteuid() != 0) && (getuid() != 0))
 		return;
@@ -186,6 +202,7 @@ void become_user(struct passwd *pw)
 
 	if (setuid(pw->pw_uid) == -1)
 		fatal_with_errno(EXIT_FAILURE, "setuid");
+#endif
 }
 
 /* drop down into a directory and throw away pointers to the old path */
@@ -194,18 +211,45 @@ void chroot_start(const char *path)
 	if (chdir(path))
 		fatal_with_errno(EXIT_FAILURE, "chdir(%s)", path);
 
+#ifndef WIN32
 	if (chroot(path))
 		fatal_with_errno(EXIT_FAILURE, "chroot(%s)", path);
 
+#endif
 	if (chdir("/"))
 		fatal_with_errno(EXIT_FAILURE, "chdir(/)");
 
 	upsdebugx(1, "chrooted into %s", path);
 }
 
+#ifdef WIN32
+/* In WIN32 all non binaries files (namely configuration and PID files)
+   are retrieved relative to the path of the binary itself.
+   So this function fill "dest" with the full path to "relative_path"
+   depending on the .exe path */
+char * getfullpath(char * relative_path)
+{
+	char buf[SMALLBUF];
+	if ( GetModuleFileName(NULL,buf,SMALLBUF) == 0 ) {
+		return NULL;
+	}
+
+	/* remove trailing executable name and its preceeding slash*/
+	char * last_slash = strrchr(buf,'\\');
+	*last_slash = 0;
+
+	if( relative_path ) {
+		strncat(buf,relative_path,SMALLBUF);
+	}
+
+	return(xstrdup(buf));
+}
+#endif
+
 /* drop off a pidfile for this process */
 void writepid(const char *name)
 {
+#ifndef WIN32
 	char	fn[SMALLBUF];
 	FILE	*pidf;
 	int	mask;
@@ -213,8 +257,9 @@ void writepid(const char *name)
 	/* use full path if present, else build filename in PIDPATH */
 	if (*name == '/')
 		snprintf(fn, sizeof(fn), "%s", name);
-	else
+	else {
 		snprintf(fn, sizeof(fn), "%s/%s.pid", PIDPATH, name);
+	}
 
 	mask = umask(022);
 	pidf = fopen(fn, "w");
@@ -227,9 +272,11 @@ void writepid(const char *name)
 	}
 
 	umask(mask);
+#endif
 }
 
 /* open pidfn, get the pid, then send it sig */
+#ifndef WIN32
 int sendsignalfn(const char *pidfn, int sig)
 {
 	char	buf[SMALLBUF];
@@ -277,6 +324,20 @@ int sendsignalfn(const char *pidfn, int sig)
 	fclose(pidf);
 	return 0;
 }
+#else
+int sendsignalfn(const char *pidfn, const char * sig)
+{
+	BOOL	ret;
+
+	ret = send_to_named_pipe(pidfn,sig);
+
+	if (ret != 0) {
+		return -1;
+	}
+
+	return 0;
+}
+#endif
 
 int snprintfcat(char *dst, size_t size, const char *fmt, ...)
 {
@@ -296,6 +357,7 @@ int snprintfcat(char *dst, size_t size, const char *fmt, ...)
 }
 
 /* lazy way to send a signal if the program uses the PIDPATH */
+#ifndef WIN32
 int sendsignal(const char *progname, int sig)
 {
 	char	fn[SMALLBUF];
@@ -304,10 +366,25 @@ int sendsignal(const char *progname, int sig)
 
 	return sendsignalfn(fn, sig);
 }
+#else
+int sendsignal(const char *progname, const char * sig)
+{
+	return sendsignalfn(progname, sig);
+}
+#endif
 
 const char *xbasename(const char *file)
 {
+#ifndef WIN32
 	const char *p = strrchr(file, '/');
+#else
+	const char *p = strrchr(file, '\\');
+	const char *r = strrchr(file, '/');
+	/* if not found, try '/' */
+	if( r > p ) {
+		p = r;
+	}
+#endif
 
 	if (p == NULL)
 		return file;
@@ -325,8 +402,26 @@ static void vupslog(int priority, const char *fmt, va_list va, int use_strerror)
 		syslog(LOG_WARNING, "vupslog: vsnprintf needed more than %d bytes",
 			LARGEBUF);
 
-	if (use_strerror)
+	if (use_strerror) {
 		snprintfcat(buf, sizeof(buf), ": %s", strerror(errno));
+#ifdef WIN32
+		LPVOID WinBuf;
+		DWORD WinErr = GetLastError();
+		FormatMessage(
+				FORMAT_MESSAGE_MAX_WIDTH_MASK |
+				FORMAT_MESSAGE_ALLOCATE_BUFFER |
+				FORMAT_MESSAGE_FROM_SYSTEM |
+				FORMAT_MESSAGE_IGNORE_INSERTS,
+				NULL,
+				WinErr,
+				MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+				(LPTSTR) &WinBuf,
+				0, NULL );
+
+		snprintfcat(buf, sizeof(buf), " [%s]", (char *)WinBuf);
+		LocalFree(WinBuf);
+#endif
+	}
 
 	if (nut_debug_level > 0) {
 		static struct timeval	start = { 0 };
@@ -352,26 +447,33 @@ static void vupslog(int priority, const char *fmt, va_list va, int use_strerror)
 		syslog(priority, "%s", buf);
 }
 
+
 /* Return the default path for the directory containing configuration files */
 const char * confpath(void)
 {
-	const char * path;
-
-	if ((path = getenv("NUT_CONFPATH")) == NULL)
-		path = CONFPATH;
-
-	return path;
+#ifndef WIN32
+	const char *path = getenv("NUT_CONFPATH");
+#else
+	static const char *path = NULL;
+	if (path == NULL) {
+		path = getfullpath(PATH_ETC);
+	}
+#endif
+	return (path != NULL) ? path : CONFPATH;
 }
 
 /* Return the default path for the directory containing state files */
 const char * dflt_statepath(void)
 {
-	const char * path;
-
-	if ((path = getenv("NUT_STATEPATH")) == NULL)
-		path = STATEPATH;
-
-	return path;
+#ifndef WIN32
+	const char *path = getenv("NUT_STATEPATH");
+#else
+	static const char *path = NULL;
+	if (path == NULL) {
+		path = getfullpath(PATH_VAR_RUN);
+	}
+#endif
+	return (path != NULL) ? path : STATEPATH;
 }
 
 /* Return the alternate path for pid files */
@@ -584,6 +686,7 @@ void *xmalloc(size_t size)
 
 	if (p == NULL)
 		fatal_with_errno(EXIT_FAILURE, "%s", oom_msg);
+	memset(p,0,size);
 	return p;
 }
 
@@ -593,6 +696,7 @@ void *xcalloc(size_t number, size_t size)
 
 	if (p == NULL)
 		fatal_with_errno(EXIT_FAILURE, "%s", oom_msg);
+	memset(p,0,size*number);
 	return p;
 }
 
@@ -617,6 +721,7 @@ char *xstrdup(const char *string)
 /* Read up to buflen bytes from fd and return the number of bytes
    read. If no data is available within d_sec + d_usec, return 0.
    On error, a value < 0 is returned (errno indicates error). */
+#ifndef WIN32
 int select_read(const int fd, void *buf, const size_t buflen, const long d_sec, const long d_usec)
 {
 	int		ret;
@@ -637,12 +742,34 @@ int select_read(const int fd, void *buf, const size_t buflen, const long d_sec, 
 
 	return read(fd, buf, buflen);
 }
+#else
+int select_read(serial_handler_t * fd, void *buf, const size_t buflen, const long d_sec, const long d_usec)
+{
+	/* This function is only called by serial drivers right now */
+	int res;
+	DWORD timeout;
+	COMMTIMEOUTS TOut;
+
+	timeout = (d_sec*1000) + ((d_usec+999)/1000);
+
+	GetCommTimeouts(fd->handle,&TOut);
+	TOut.ReadIntervalTimeout = MAXDWORD;
+	TOut.ReadTotalTimeoutMultiplier = 0;
+	TOut.ReadTotalTimeoutConstant = timeout;
+	SetCommTimeouts(fd->handle,&TOut);
+
+	res = w32_serial_read(fd,buf,buflen,timeout);
+
+	return res;
+}
+#endif
 
 /* Write up to buflen bytes to fd and return the number of bytes
    written. If no data is available within d_sec + d_usec, return 0.
    On error, a value < 0 is returned (errno indicates error). */
 int select_write(const int fd, const void *buf, const size_t buflen, const long d_sec, const long d_usec)
 {
+#ifndef WIN32
 	int		ret;
 	fd_set		fds;
 	struct timeval	tv;
@@ -660,4 +787,7 @@ int select_write(const int fd, const void *buf, const size_t buflen, const long 
 	}
 
 	return write(fd, buf, buflen);
+#else
+	return 0;
+#endif
 }

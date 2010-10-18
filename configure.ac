@@ -3,7 +3,7 @@ dnl | Network UPS Tools: configure.ac                                  |
 dnl +------------------------------------------------------------------+
 
 dnl NUT version number is defined here, with a Git suffix in include/nut_version.h
-AC_INIT(nut, 2.7.4.1, [https://github.com/networkupstools/nut/issues])
+AC_INIT(nut, 2.7.4.1-pre1, [https://github.com/networkupstools/nut/issues])
 AC_CONFIG_AUX_DIR([.])
 AC_CONFIG_SRCDIR(server/upsd.c)
 AC_CONFIG_MACRO_DIR([m4])
@@ -74,25 +74,36 @@ if test ! -d "${auglensdir}"; then
       auglensdir=''
    fi
 fi
-hotplugdir='/etc/hotplug'
-if test ! -d "${hotplugdir}"; then
-   hotplugdir=''
-fi
-udevdir='/lib/udev'
-if test ! -d "${udevdir}"; then
-   udevdir='/etc/udev'
-   if test ! -d "${udevdir}"; then
-      udevdir=''
-   fi
-fi
 
-devddir='/usr/local/etc/devd'
-if test ! -d "${devddir}"; then
-   devddir='/etc/devd'
-   if test ! -d "${devddir}"; then
-      devddir=''
-   fi
-fi
+dnl Disable Hotplug and udev support on Windows
+case ${target_os} in
+	*mingw* )
+		LIBREGEX_LIBS='-lregex'
+		hotplugdir=''
+		udevdir=''
+	;;
+	* )
+		hotplugdir='/etc/hotplug'
+		if test ! -d "${hotplugdir}"; then
+			hotplugdir=''
+		fi
+		udevdir='/lib/udev'
+		if test ! -d "${udevdir}"; then
+			udevdir='/etc/udev'
+			if test ! -d "${udevdir}"; then
+				udevdir=''
+			fi
+		fi
+
+		devddir='/usr/local/etc/devd'
+		if test ! -d "${devddir}"; then
+			devddir='/etc/devd'
+			if test ! -d "${devddir}"; then
+				devddir=''
+			fi
+		fi
+	;;
+esac
 
 RUN_AS_USER="nobody"
 RUN_AS_GROUP="nobody"
@@ -121,6 +132,7 @@ AC_CHECK_FUNCS(flock lockf fcvt fcvtl)
 AC_CHECK_FUNCS(cfsetispeed tcsendbreak)
 AC_CHECK_FUNCS(seteuid setsid getpassphrase)
 AC_CHECK_FUNCS(on_exit strptime setlogmask)
+AC_CHECK_FUNCS(usleep)
 AC_CHECK_DECLS(LOG_UPTO, [], [], [#include <syslog.h>])
 
 dnl the following may add stuff to LIBOBJS (is this still needed?)
@@ -225,6 +237,7 @@ AC_SEARCH_LIBS([pthread_create], [pthread],
 dnl ----------------------------------------------------------------------
 dnl Check for types and define possible replacements
 NUT_TYPE_SOCKLEN_T
+NUT_CHECK_SOCKETLIB
 
 dnl ----------------------------------------------------------------------
 dnl check for --with-all (or --without-all, or --with-all=auto) flag
@@ -888,6 +901,7 @@ AM_CONDITIONAL(WITH_MANS, test "${WITH_MANS}" = "yes")
 dnl ----------------------------------------------------------------------
 dnl checks related to --with-dev
 
+AC_LIBTOOL_WIN32_DLL
 dnl We only init libtool there to allow AC_DISABLE_STATIC
 AC_PROG_LIBTOOL
 
@@ -900,6 +914,20 @@ fi
 AM_CONDITIONAL(WITH_DEV, test "${nut_with_dev}" = "yes")
 NUT_REPORT_FEATURE([build and install the development files], [${nut_with_dev}], [],
 					[WITH_DEV], [Define to enable development files support])
+
+dnl ----------------------------------------------------------------------
+dnl checks related to MS Windows support (MingW)
+
+AC_CHECK_TOOL(WINDMC, windmc, none)
+AC_CHECK_TOOL(WINDRES, windres, none)
+
+if test "x$WINDMC" != "xnone" -a "x$WINDRES" != "xnone"; then
+	nut_have_mingw_resgen="yes"
+fi
+
+AM_CONDITIONAL([HAVE_MINGW_RESGEN], [test "${nut_have_mingw_resgen}" = "yes"])
+dnl Also define a generic AM_CONDITIONAL for general Windows compilation
+AM_CONDITIONAL([HAVE_WINDOWS], [test "${nut_have_mingw_resgen}" = "yes"])
 
 dnl ----------------------------------------------------------------------
 
@@ -1346,9 +1374,8 @@ dnl same for datadir
 conftemp="${datadir}"
 eval conftemp=\"${conftemp}\"
 eval conftemp=\"${conftemp}\"
-DATADIR=${conftemp}
-AC_DEFINE_UNQUOTED(DATADIR, "${conftemp}", [Default path for data files])
-
+NUT_DATADIR=${conftemp}
+AC_DEFINE_UNQUOTED(NUT_DATADIR, "${conftemp}", [Default path for data files])
 dnl same for bindir
 conftemp="${bindir}"
 eval conftemp=\"${conftemp}\"
@@ -1378,6 +1405,7 @@ AC_SUBST(OS_NAME)
 AC_SUBST(TREE_VERSION)
 AC_SUBST(NUT_NETVERSION)
 AC_SUBST(LIBSSL_CFLAGS)
+AC_SUBST(LIBREGEX_LIBS)
 AC_SUBST(LIBSSL_LIBS)
 AC_SUBST(LIBGD_CFLAGS)
 AC_SUBST(LIBGD_LDFLAGS)
@@ -1457,6 +1485,7 @@ AC_OUTPUT([
  scripts/augeas/nuthostsconf.aug
  scripts/augeas/nutupssetconf.aug
  scripts/avahi/nut.service
+ scripts/Windows/Makefile
  scripts/devd/Makefile
  scripts/devd/nut-usb.conf
  scripts/hotplug/Makefile

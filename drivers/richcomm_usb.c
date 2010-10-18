@@ -181,6 +181,9 @@ static int driver_callback(usb_dev_handle *handle, USBDevice_t *device)
 		return -1;
 	}
 
+#ifdef WIN
+	usb_set_configuration(handle, 0);
+#endif
 	if (usb_claim_interface(handle, 0) < 0) {
 		upsdebugx(5, "Can't claim USB interface");
 		return -1;
@@ -358,7 +361,13 @@ void upsdrv_initups(void)
 
 	for (i = 0; usb_device_open(&udev, &usbdevice, &device_matcher, &driver_callback) < 0; i++) {
 
+#ifndef WIN32
 		if ((i < 32) && (sleep(5) == 0)) {
+#else
+/*FIXME*/
+		sleep(5);
+		if ((i < 32)) {
+#endif
 			usb_comm_fail("Can't open USB device, retrying ...");
 			continue;
 		}

@@ -17,7 +17,9 @@
    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 */
 
+#ifndef WIN32
 #include <sys/ioctl.h>
+#endif
 
 #include "main.h"
 #include "serial.h"
@@ -192,9 +194,13 @@ void upsdrv_initinfo(void)
 /* normal idle loop - keep up with the current state of the UPS */
 void upsdrv_updateinfo(void)
 {
-	int	flags, ol, bl, ret;
+	int     flags, ol, bl, ret;
 
+#ifndef WIN32
 	ret = ioctl(upsfd, TIOCMGET, &flags);
+#else
+	ret = w32_getcomm( upsfd, &flags );
+#endif
 
 	if (ret != 0) {
 		upslog_with_errno(LOG_INFO, "ioctl failed");
@@ -279,8 +285,10 @@ void upsdrv_shutdown(void)
 
 	if (flags == TIOCM_ST) {
 
+#ifndef WIN32
 #ifndef HAVE_TCSENDBREAK
 		fatalx(EXIT_FAILURE, "Need to send a BREAK, but don't have tcsendbreak!");
+#endif
 #endif
 
 		ret = tcsendbreak(upsfd, 4901);
@@ -292,7 +300,11 @@ void upsdrv_shutdown(void)
 		return;
 	}
 
+#ifndef WIN32
 	ret = ioctl(upsfd, TIOCMSET, &flags);
+#else
+	ret = w32_setcomm(upsfd,&flags);
+#endif
 
 	if (ret != 0) {
 		fatal_with_errno(EXIT_FAILURE, "ioctl TIOCMSET");
@@ -364,7 +376,11 @@ void upsdrv_initups(void)
 		upsdebugx(2, "parse_output_signals: SD overridden with %s\n", v);
 	}
 
+#ifndef WIN32
 	if (ioctl(upsfd, TIOCMSET, &upstab[upstype].line_norm)) {
+#else
+	if (w32_setcomm(upsfd,&upstab[upstype].line_norm)) {
+#endif
 		fatal_with_errno(EXIT_FAILURE, "ioctl TIOCMSET");
 	}
 }
@@ -373,4 +389,3 @@ void upsdrv_cleanup(void)
 {
 	ser_close(upsfd, device_path);
 }
-

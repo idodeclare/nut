@@ -45,6 +45,11 @@
 /** *_OBJECT query multi-part body boundary */
 #define FORM_POST_BOUNDARY "NUT-NETXML-UPS-OBJECTS"
 
+#ifdef WIN32 /* FIXME ?? skip alarm handling */
+#define HAVE_NE_SET_CONNECT_TIMEOUT  1
+#define HAVE_NE_SOCK_CONNECT_TIMEOUT 1
+#endif
+
 /* driver description structure */
 upsdrv_info_t	upsdrv_info = {
 	DRIVER_NAME,
@@ -273,7 +278,10 @@ void upsdrv_initinfo(void)
 		dstate_setinfo("driver.version.data", "%s", subdriver->version);
 
 		if (testvar("subscribe") && (netxml_alarm_subscribe(subdriver->subscribe) == NE_OK)) {
+/* TODO: port extrafd to Windows */
+#ifndef WIN32
 			extrafd = ne_sock_fd(sock);
+#endif
 			time(&lastheard);
 		}
 
@@ -328,13 +336,19 @@ void upsdrv_updateinfo(void)
 			ne_sock_close(sock);
 
 			if (netxml_alarm_subscribe(subdriver->subscribe) == NE_OK) {
+/* TODO: port extrafd to Windows */
+#ifndef WIN32
 				extrafd = ne_sock_fd(sock);
+#endif
 				time(&lastheard);
 				return;
 			}
 
 			dstate_datastale();
+/* TODO: port extrafd to Windows */
+#ifndef WIN32
 			extrafd = -1;
+#endif
 			return;
 		}
 	}
@@ -606,7 +620,11 @@ void upsdrv_initups(void)
 
 	/* if debug level is set, direct output to stderr */
 	if (!nut_debug_level) {
+#ifndef WIN32
 		fp = fopen("/dev/null", "w");
+#else
+		fp = fopen("nul", "w");
+#endif
 	} else {
 		fp = stderr;
 	}

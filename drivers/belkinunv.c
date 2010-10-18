@@ -440,17 +440,19 @@ static int belkin_nut_write_int(int reg, int val) {
    will be discarded. After this call, the device is ready for reading
    and writing via read(2) and write(2). Return a valid file
    descriptor on success, or else -1 with errno set. */
-static int belkin_std_open_tty(const char *device) {
-	int fd;
+static TYPE_FD belkin_std_open_tty(const char *device) {
+	TYPE_FD fd;
 	struct termios tios;
+#ifndef WIN32
 	struct flock flock;
+#endif
 	char buf[128];
 	int r;
 	
 	/* open the device */
 	fd = open(device, O_RDWR | O_NONBLOCK);
-	if (fd == -1) {
-		return -1;
+	if (fd == ERROR_FD) {
+		return ERROR_FD;
 	}
 	
 	/* set communications parameters: 2400 baud, 8 bits, 1 stop bit, no
@@ -463,7 +465,7 @@ static int belkin_std_open_tty(const char *device) {
 	r = tcsetattr(fd, TCSANOW, &tios);
 	if (r == -1) {
 		close(fd);
-		return -1;
+		return ERROR_FD;
 	}
 	
 	/* signal the UPS to enter "smart" mode. This is done by setting RTS
@@ -480,17 +482,20 @@ static int belkin_std_open_tty(const char *device) {
 	r = ser_flush_io(fd);
 	if (r == -1) {
 		close(fd);
-		return -1;
+		return ERROR_FD;
 	}
-	
+
+/* TODO: port to WIN32 */
+#ifndef WIN32
 	/* lock the port */
 	memset(&flock, 0, sizeof(flock));
 	flock.l_type = F_RDLCK;
 	r = fcntl(fd, F_SETLK, &flock);
 	if (r == -1) {
 		close(fd);
-		return -1;
+		return ERROR_FD;
 	}
+#endif
 	
 	/* sleep at least 0.25 seconds for the UPS to wake up. Belkin's own
 	   software sleeps 1 second, so that's what we do, too. */
@@ -501,13 +506,19 @@ static int belkin_std_open_tty(const char *device) {
 	r = tcflush(fd, TCIFLUSH);
 	if (r == -1) {
 		close(fd);
-		return -1;
+		return ERROR_FD;
 	}
 	
+#ifndef WIN32
 	r = read(fd, buf, 127);
+#else
+/* WIN32 : w32_serial_read is blocking, using select_read with 0ms timeout
+is non-blocking */
+	r = select_read(fd, buf, 127,0,0);
+#endif
 	if (r == -1 && errno != EAGAIN) {
 		close(fd);
-		return -1;
+		return ERROR_FD;
 	}
 	
 	/* leave port in non-blocking state */
@@ -516,13 +527,19 @@ static int belkin_std_open_tty(const char *device) {
 }
 
 /* blocking read with 1-second timeout (use non-blocking i/o) */
-static int belkin_std_upsread(int fd, unsigned char *buf, int n) {
+static int belkin_std_upsread(TYPE_FD fd, unsigned char *buf, int n) {
 	int count = 0;
 	int r;
 	int tries = 0;
 	
 	while (count < n) {
+#ifndef WIN32
 		r = read(fd, &buf[count], n-count);
+#else
+		/* WIN32 : w32_serial_read is blocking, using select_read
+		with 0ms timeout is non-blocking */
+		r = select_read(fd, buf, 127,0,0);
+#endif
 		if (r==-1 && errno==EAGAIN) { 
 			/* non-blocking i/o, no data available */
 			usleep(100000);
@@ -540,7 +557,7 @@ static int belkin_std_upsread(int fd, unsigned char *buf, int n) {
 }
 
 /* blocking write with 1-second timeout (use non-blocking i/o) */
-static int belkin_std_upswrite(int fd, unsigned char *buf, int n) {
+static int belkin_std_upswrite(TYPE_FD fd, unsigned char *buf, int n) {
 	int count = 0;
 	int r;
 	int tries = 0;
@@ -566,7 +583,7 @@ static int belkin_std_upswrite(int fd, unsigned char *buf, int n) {
 /* receive Belkin message from UPS, check for well-formedness (leading
    byte, checksum). Return length of message, or -1 if not
    well-formed */
-static int belkin_std_receive(int fd, unsigned char *buf, int bufsize) {
+static int belkin_std_receive(TYPE_FD fd, unsigned char *buf, int bufsize) {
 	int r;
 	int n=0;
 	int len;
@@ -612,7 +629,7 @@ static int belkin_std_receive(int fd, unsigned char *buf, int bufsize) {
 
 /* read the value of an integer register from UPS. Return -1 on
    failure. */
-static int belkin_std_read_int(int fd, int reg) {
+static int belkin_std_read_int(TYPE_FD fd, int reg) {
 	unsigned char buf[MAXMSGSIZE];
 	int len, r;
 
@@ -654,7 +671,7 @@ static int belkin_std_read_int(int fd, int reg) {
 
 /* write the value of an integer register to UPS. Return -1 on
    failure, else 0 */
-static int belkin_std_write_int(int fd, int reg, int val) {
+static int belkin_std_write_int(TYPE_FD fd, int reg, int val) {
 	unsigned char buf[MAXMSGSIZE];
 	int r;
   
@@ -747,7 +764,7 @@ static int belkin_wait(void)
 	char *val;
 	int failcount = 0;  /* count consecutive failed connection attempts */
 	int failerrno = 0;
-	int fd;
+	TYPE_FD fd;
 	int r;
 	int bs, ov, bl, st;
 
@@ -773,7 +790,7 @@ static int belkin_wait(void)
 	
 	updatestatus(smode, "Connecting to UPS...");
 	failcount = 0;
-	fd = -1;
+	fd = ERROR_FD;
 
 	while (1) {
 		if (failcount >= 3 && nohang) {
@@ -783,10 +800,10 @@ static int belkin_wait(void)
 		} else if (failcount >= 3) {
 			updatestatus(smode, "UPS is not responding, will keep trying: %s", strerror(failerrno));
 		}
-		if (fd == -1) {
+		if (fd == ERROR_FD) {
 			fd = belkin_std_open_tty(device_path);
 		}
-		if (fd == -1) {
+		if (fd == ERROR_FD) {
 			failcount++;
 			failerrno = errno;
 			sleep(1);
@@ -800,7 +817,7 @@ static int belkin_wait(void)
 			failcount++;
 			failerrno = errno;
 			close(fd);
-			fd = -1;
+			fd = ERROR_FD;
 			sleep(1);
 			continue;
 		}
@@ -809,7 +826,7 @@ static int belkin_wait(void)
 			failcount++;
 			failerrno = errno;
 			close(fd);
-			fd = -1;
+			fd = ERROR_FD;
 			sleep(1);
 			continue;
 		}
@@ -818,7 +835,7 @@ static int belkin_wait(void)
 			failcount++;
 			failerrno = errno;
 			close(fd);
-			fd = -1;
+			fd = ERROR_FD;
 			sleep(1);
 			continue;
 		}

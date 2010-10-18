@@ -29,9 +29,12 @@
  *   * poll the "port" file for change
  */
 
+#ifndef WIN32
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#endif
+
 #include <string.h>
 
 #include "main.h"
@@ -67,7 +70,11 @@ time_t		next_update = -1;
 
 static int setvar(const char *varname, const char *val);
 static int instcmd(const char *cmdname, const char *extra);
+#ifndef WIN32
 static int parse_data_file(int upsfd);
+#else
+static int parse_data_file(HANDLE upsfd);
+#endif
 static dummy_info_t *find_info(const char *varname);
 static int is_valid_data(const char* varname);
 static int is_valid_value(const char* varname, const char *value);
@@ -424,7 +431,11 @@ static void upsconf_err(const char *errmsg)
 /* for dummy mode
  * parse the definition file and process its content
  */ 
+#ifndef WIN32
 static int parse_data_file(int upsfd)
+#else
+static int parse_data_file(HANDLE upsfd)
+#endif
 {
 	char	fn[SMALLBUF];
 	char	*ptr, var_value[MAX_STRING_SIZE];

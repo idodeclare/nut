@@ -27,10 +27,22 @@
 #include "netcmds.h"
 #include "upsconf.h"
 
+#ifndef WIN32
 #include <sys/un.h>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <poll.h>
+#else
+/* Those 2 files for support of getaddrinfo, getnameinfo and freeaddrinfo
+   on Windows 2000 and older versions */
+#include <ws2tcpip.h>
+#include <wspiapi.h>
+/* This override network system calls to adapt to Windows specificity */
+#define W32_NETWORK_CALL_OVERRIDE
+#include "wincompat.h"
+#undef W32_NETWORK_CALL_OVERRIDE
+#include <getopt.h>
+#endif
 
 #include "user.h"
 #include "nut_ctype.h"
@@ -59,7 +71,7 @@ int	deny_severity = LOG_WARNING;
 	/* preloaded to STATEPATH in main, can be overridden via upsd.conf */
 	char	*statepath = NULL;
 
-	/* preloaded to DATADIR in main, can be overridden via upsd.conf */
+	/* preloaded to NUT_DATADIR in main, can be overridden via upsd.conf */
 	char	*datapath = NULL;
 
 	/* everything else */
@@ -77,6 +89,9 @@ typedef enum {
 	DRIVER = 1,
 	CLIENT,
 	SERVER
+#ifdef WIN32
+	,NAMED_PIPE
+#endif
 } handler_type_t;
 
 typedef struct {
@@ -84,8 +99,13 @@ typedef struct {
 	void		*data;
 } handler_t;
 
+#ifndef WIN32
 	/* pollfd  */
 static struct pollfd	*fds = NULL;
+#else
+static HANDLE		*fds = NULL;
+static HANDLE		mutex = INVALID_HANDLE_VALUE;
+#endif
 static handler_t	*handler = NULL;
 
 	/* pid file */
@@ -178,6 +198,11 @@ void listen_add(const char *addr, const char *port)
 /* create a listening socket for tcp connections */
 static void setuptcp(stype_t *server)
 {
+#ifdef WIN32
+	WSADATA WSAdata;
+	WSAStartup(2,&WSAdata);
+	atexit((void(*)(void))WSACleanup);
+#endif
 	struct addrinfo		hints, *res, *ai;
 	int	v = 0, one = 1;
 
@@ -215,6 +240,8 @@ static void setuptcp(stype_t *server)
 			continue;
 		}
 
+/* WSAEventSelect automatically set the socket to nonblocking mode */
+#ifndef WIN32
 		if ((v = fcntl(sock_fd, F_GETFL, 0)) == -1) {
 			fatal_with_errno(EXIT_FAILURE, "setuptcp: fcntl(get)");
 		}
@@ -223,6 +250,7 @@ static void setuptcp(stype_t *server)
 			fatal_with_errno(EXIT_FAILURE, "setuptcp: fcntl(set)");
 		}
 
+#endif
 		if (listen(sock_fd, 16) < 0) {
 			upsdebug_with_errno(3, "setuptcp: listen");
 			close(sock_fd);
@@ -232,6 +260,16 @@ static void setuptcp(stype_t *server)
 		server->sock_fd = sock_fd;
 		break;
 	}
+
+#ifdef WIN32
+		server->Event = CreateEvent(NULL, /* Security */
+				FALSE, /* auto-reset */
+				FALSE, /* initial state */
+				NULL); /* no name */
+
+		/* Associate socket event to the socket via its Event object */
+		WSAEventSelect( server->sock_fd, server->Event, FD_ACCEPT );
+#endif
 
 	freeaddrinfo(res);
 
@@ -276,6 +314,9 @@ static void client_disconnect(nut_ctype_t *client)
 
 	shutdown(client->sock_fd, 2);
 	close(client->sock_fd);
+#ifdef WIN32
+	CloseHandle(client->Event);
+#endif
 
 	if (client->loginups) {
 		declogins(client->loginups);
@@ -480,6 +521,15 @@ static void client_connect(stype_t *server)
 
 	client->addr = xstrdup(inet_ntopW(&csock));
 
+#ifdef WIN32
+	client->Event = CreateEvent(NULL, /*Security,*/
+				FALSE, /*auo-reset */
+				FALSE, /*initial state*/
+				NULL); /* no name */
+
+	/* Associate socket event to the socket via its Event object */
+	WSAEventSelect( client->sock_fd, client->Event, FD_READ );
+#endif
 	pconf_init(&client->ctx, NULL);
 
 	if (firstclient) {
@@ -614,9 +664,17 @@ void driver_free(void)
 	for (ups = firstups; ups; ups = unext) {
 		unext = ups->next;
 
+#ifndef WIN32
 		if (ups->sock_fd != -1) {
 			close(ups->sock_fd);
 		}
+#else
+		if (ups->sock_fd != INVALID_HANDLE_VALUE) {
+			DisconnectNamedPipe(ups->sock_fd);
+			CloseHandle(ups->sock_fd);
+			ups->sock_fd = INVALID_HANDLE_VALUE;
+		}
+#endif
 
 		sstate_infofree(ups);
 		sstate_cmdfree(ups);
@@ -653,10 +711,18 @@ static void upsd_cleanup(void)
 
 	free(fds);
 	free(handler);
+
+#ifdef WIN32
+	if(mutex != INVALID_HANDLE_VALUE) {
+		ReleaseMutex(mutex);
+		CloseHandle(mutex);
+	}
+#endif
 }
 
 void poll_reload(void)
 {
+#ifndef WIN32
 	int	ret;
 
 	ret = sysconf(_SC_OPEN_MAX);
@@ -670,12 +736,32 @@ void poll_reload(void)
 
 	fds = xrealloc(fds, maxconn * sizeof(*fds));
 	handler = xrealloc(handler, maxconn * sizeof(*handler));
+#else
+	fds = xrealloc(fds, MAXIMUM_WAIT_OBJECTS * sizeof(*fds));
+	handler = xrealloc(handler, MAXIMUM_WAIT_OBJECTS * sizeof(*handler));
+#endif
+}
+
+static void set_exit_flag(int sig)
+{
+	exit_flag = sig;
+}
+
+static void set_reload_flag(int sig)
+{
+	reload_flag = 1;
 }
 
 /* service requests and check on new data */
 static void mainloop(void)
 {
-	int	i, ret, nfds = 0;
+	int     nfds = 0;
+#ifndef WIN32
+	int	i, ret;
+#else
+	DWORD	ret;
+	pipe_conn_t * conn;
+#endif
 
 	upstype_t	*ups;
 	nut_ctype_t		*client, *cnext;
@@ -690,6 +776,7 @@ static void mainloop(void)
 		reload_flag = 0;
 	}
 
+#ifndef WIN32
 	/* scan through driver sockets */
 	for (ups = firstups; ups && (nfds < maxconn); ups = ups->next) {
 
@@ -814,6 +901,140 @@ static void mainloop(void)
 			continue;
 		}
 	}
+#else
+	/* scan through driver sockets */
+	for (ups = firstups; ups && (nfds < maxconn); ups = ups->next) {
+
+		/* see if we need to (re)connect to the socket */
+		if (ups->sock_fd == INVALID_HANDLE_VALUE) {
+			ups->sock_fd = sstate_connect(ups);
+			continue;
+		}
+
+		/* throw some warnings if it's not feeding us data any more */
+		if (sstate_dead(ups, maxage)) {
+			ups_data_stale(ups);
+		} else {
+			ups_data_ok(ups);
+		}
+
+		if( ups->sock_fd != INVALID_HANDLE_VALUE) {
+			fds[nfds] = ups->read_overlapped.hEvent;
+
+			handler[nfds].type = DRIVER;
+			handler[nfds].data = ups;
+
+			nfds++;
+		}
+	}
+
+	/* scan through client sockets */
+	for (client = firstclient; client; client = cnext) {
+
+		cnext = client->next;
+
+		if (difftime(now, client->last_heard) > 60) {
+			/* shed clients after 1 minute of inactivity */
+			client_disconnect(client);
+			continue;
+		}
+
+		if (nfds >= maxconn) {
+			/* ignore clients that we are unable to handle */
+			continue;
+		}
+
+		fds[nfds] = client->Event;
+
+		handler[nfds].type = CLIENT;
+		handler[nfds].data = client;
+
+		nfds++;
+	}
+
+	/* scan through server sockets */
+	for (server = firstaddr; server && (nfds < maxconn); server = server->next) {
+
+		if (server->sock_fd < 0) {
+			continue;
+		}
+
+		fds[nfds] = server->Event;
+
+		handler[nfds].type = SERVER;
+		handler[nfds].data = server;
+
+		nfds++;
+	}
+
+	/* Wait on the read IO on named pipe  */
+	for (conn = pipe_connhead; conn; conn = conn->next) {
+		fds[nfds] = conn->overlapped.hEvent;
+		handler[nfds].type = NAMED_PIPE;
+		handler[nfds].data = (void *)conn;
+		nfds++;
+	}
+	/* Add the new named pipe connected event */
+	fds[nfds] = pipe_connection_overlapped.hEvent;
+	handler[nfds].type = NAMED_PIPE;
+	handler[nfds].data = NULL;
+	nfds++;
+
+	upsdebugx(2, "%s: wait for %d filedescriptors", __func__, nfds);
+
+	ret = WaitForMultipleObjects(nfds,fds,FALSE,2000);
+
+	if (ret == WAIT_TIMEOUT) {
+		upsdebugx(2, "%s: no data available", __func__);
+		return;
+	}
+
+	if (ret == WAIT_FAILED) {
+		DWORD err = GetLastError();
+		err =err; /* remove compile time warning */
+		upslog_with_errno(LOG_ERR, "%s", __func__);
+		return;
+	}
+
+	switch(handler[ret].type) {
+		case DRIVER:
+			sstate_readline((upstype_t *)handler[ret].data);
+			break;
+		case CLIENT:
+			client_readline((nut_ctype_t *)handler[ret].data);
+			break;
+		case SERVER:
+			client_connect((stype_t *)handler[ret].data);
+			break;
+		case NAMED_PIPE:
+			/* a new pipe connection has been signaled */
+			if (fds[ret] == pipe_connection_overlapped.hEvent) {
+				pipe_connect();
+			}
+			/* one of the read event handle has been signaled */
+			else {
+				pipe_conn_t * conn = handler[ret].data;
+				if ( pipe_ready(conn) ) {
+					if (!strncmp(conn->buf, SIGCMD_STOP, sizeof(SIGCMD_STOP))) {
+						set_exit_flag(1);
+					}
+					else if (!strncmp(conn->buf, SIGCMD_RELOAD, sizeof(SIGCMD_RELOAD))) {
+						set_reload_flag(1);
+					}
+					else {
+						upslogx(LOG_ERR,"Unknown signal"
+						       );
+					}
+
+					pipe_disconnect(conn);
+				}
+			}
+			break;
+		default:
+			upsdebugx(2, "%s: <unknown> has data available", __func__);
+			break;
+	}
+#endif
 }
 
 static void help(const char *progname) 
@@ -838,18 +1059,9 @@ static void help(const char *progname)
 	exit(EXIT_SUCCESS);
 }
 
-static void set_reload_flag(int sig)
-{
-	reload_flag = 1;
-}
-
-static void set_exit_flag(int sig)
-{
-	exit_flag = sig;
-}
-
 static void setup_signals(void)
 {
+#ifndef WIN32
 	struct sigaction	sa;
 
 	sigemptyset(&sa.sa_mask);
@@ -869,10 +1081,14 @@ static void setup_signals(void)
 	/* handle reloading */
 	sa.sa_handler = set_reload_flag;
 	sigaction(SIGHUP, &sa, NULL);
+#else
+	pipe_create(UPSD_PIPE_NAME);
+#endif
 }
 
 void check_perms(const char *fn)
 {
+#ifndef WIN32
 	int	ret;
 	struct stat	st;
 
@@ -886,11 +1102,17 @@ void check_perms(const char *fn)
 	if (st.st_mode & (S_IROTH | S_IXOTH)) {
 		upslogx(LOG_WARNING, "%s is world readable", fn);
 	}
+#endif
 }
 
 int main(int argc, char **argv)
 {
-	int	i, cmd = 0;
+	int	i;
+#ifndef WIN32
+	int	cmd = 0;
+#else
+	const char * cmd = NULL;
+#endif
 	char	*chroot_path = NULL;
 	const char	*user = RUN_AS_USER;
 	struct passwd	*new_uid = NULL;
@@ -899,7 +1121,26 @@ int main(int argc, char **argv)
 
 	/* yes, xstrdup - the conf handlers call free on this later */
 	statepath = xstrdup(dflt_statepath());
-	datapath = xstrdup(DATADIR);
+#ifndef WIN32
+	datapath = xstrdup(NUT_DATADIR);
+#else
+	datapath = getfullpath(PATH_SHARE);
+
+	/* remove trailing .exe */
+	char * drv_name;
+	drv_name = (char *)xbasename(argv[0]);
+	char * name = strrchr(drv_name,'.');
+	if( name != NULL ) {
+		if(strcasecmp(name, ".exe") == 0 ) {
+			progname = strdup(drv_name);
+			char * t = strrchr(progname,'.');
+			*t = 0;
+		}
+	}
+	else {
+		progname = drv_name;
+	}
+#endif
 
 	/* set up some things for later */
 	snprintf(pidfn, sizeof(pidfn), "%s/%s.pid", altpidpath(), progname);
@@ -959,14 +1200,29 @@ int main(int argc, char **argv)
 	}
 
 	if (cmd) {
+#ifndef WIN32
 		sendsignalfn(pidfn, cmd);
+#else
+		sendsignal(UPSD_PIPE_NAME,cmd);
+#endif
 		exit(EXIT_SUCCESS);
 	}
 
 	/* otherwise, we are being asked to start.
 	 * so check if a previous instance is running by sending signal '0'
 	 * (Ie 'kill <pid> 0') */
+#ifndef WIN32
 	if (sendsignalfn(pidfn, 0) == 0) {
+#else
+	mutex = CreateMutex(NULL,TRUE,UPSD_PIPE_NAME);
+	if(mutex == NULL ) {
+		if( GetLastError() != ERROR_ACCESS_DENIED ) {
+			fatalx(EXIT_FAILURE, "Can not create mutex %s : %d.\n",UPSD_PIPE_NAME,(int)GetLastError());
+		}
+	}
+
+        if (GetLastError() == ERROR_ALREADY_EXISTS || GetLastError() == ERROR_ACCESS_DENIED) {
+#endif
 		printf("Fatal error: A previous upsd instance is already running!\n");
 		printf("Either stop the previous instance first, or use the 'reload' command.\n");
 		exit(EXIT_FAILURE);
@@ -995,8 +1251,12 @@ int main(int argc, char **argv)
 		chroot_start(chroot_path);
 	}
 
+#ifndef WIN32
 	/* default to system limit (may be overridden in upsd.conf */
 	maxconn = sysconf(_SC_OPEN_MAX);
+#else
+	maxconn = 64;  /*FIXME : arbitrary value, need adjustement */
+#endif
 
 	/* handle upsd.conf */
 	load_upsdconf(0);	/* 0 = initial */
@@ -1006,9 +1266,11 @@ int main(int argc, char **argv)
 
 	become_user(new_uid);
 
+#ifndef WIN32
 	if (chdir(statepath)) {
 		fatal_with_errno(EXIT_FAILURE, "Can't chdir to %s", statepath);
 	}
+#endif
 
 	/* check statepath perms */
 	check_perms(statepath);

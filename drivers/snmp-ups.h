@@ -75,9 +75,14 @@
 #undef HAVE_DMALLOC_H
 #endif
 
+#ifdef WIN32
+#undef random
+#undef _WIN32_WINNT
+#endif
 #include <net-snmp/net-snmp-config.h>
 #include <net-snmp/net-snmp-includes.h>
 
+#undef DISABLE_MIB_LOADING
 /* Force numeric OIDs by disabling MIB loading */
 #define DISABLE_MIB_LOADING 1
 

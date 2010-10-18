@@ -33,7 +33,13 @@
 
 /* track client connections */
 typedef struct conn_s {
+#ifdef WIN32
+	HANDLE	fd;
+	char    buf[LARGEBUF];
+	OVERLAPPED read_overlapped;
+#else
 	int     fd;
+#endif
 	PCONF_CTX_t	ctx;
 	struct conn_s	*prev;
 	struct conn_s	*next;
@@ -46,7 +52,11 @@ typedef struct conn_s {
 	extern	int	do_synchronous;
 
 void dstate_init(const char *prog, const char *devname);
+#ifndef WIN32
 int dstate_poll_fds(struct timeval timeout, int extrafd);
+#else
+int dstate_poll_fds(struct timeval timeout, HANDLE extrafd);
+#endif
 int dstate_setinfo(const char *var, const char *fmt, ...)
 	__attribute__ ((__format__ (__printf__, 2, 3)));
 int dstate_addenum(const char *var, const char *fmt, ...)

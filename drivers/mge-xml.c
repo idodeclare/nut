@@ -31,6 +31,9 @@
 #include "netxml-ups.h"
 #include "mge-xml.h"
 
+#ifdef WIN32
+#include "wincompat.h"
+#endif
 #define MGE_XML_VERSION		"MGEXML/0.26"
 #define MGE_XML_INITUPS		"/"
 #define MGE_XML_INITINFO	"/mgeups/product.xml /product.xml /ws/product.xml"

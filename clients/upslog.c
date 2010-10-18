@@ -39,13 +39,19 @@
 #include "timehead.h"
 #include "upslog.h"
 
+#ifdef WIN32
+#include "wincompat.h"
+#endif
+
 	static	int	port, reopen_flag = 0, exit_flag = 0;
 	static	char	*upsname, *hostname;
 	static	UPSCONN_t	ups;
 
 	static	FILE	*logfile;
 	static	const	char *logfn, *monhost;
+#ifndef WIN32
 	static	sigset_t	nut_upslog_sigmask;
+#endif
 	static	char	logbuffer[LARGEBUF], *logformat;
 
 	static	flist_t	*fhead = NULL;
@@ -67,6 +73,7 @@ static void reopen_log(void)
 		fatal_with_errno(EXIT_FAILURE, "could not reopen logfile %s", logfn);
 }
 
+#ifndef WIN32
 static void set_reopen_flag(int sig)
 {
 	reopen_flag = sig;
@@ -76,6 +83,7 @@ static void set_exit_flag(int sig)
 {
 	exit_flag = sig;
 }
+#endif
 
 static void set_print_now_flag(int sig)
 {
@@ -85,6 +93,7 @@ static void set_print_now_flag(int sig)
 /* handlers: reload on HUP, exit on INT/QUIT/TERM */
 static void setup_signals(void)
 {
+#ifndef WIN32
 	struct	sigaction	sa;
 
 	sigemptyset(&nut_upslog_sigmask);
@@ -106,6 +115,7 @@ static void setup_signals(void)
 	sa.sa_handler = set_print_now_flag;
 	if (sigaction(SIGUSR1, &sa, NULL) < 0)
 		fatal_with_errno(EXIT_FAILURE, "Can't install SIGUSR1 handler");
+#endif
 }
 
 static void help(const char *prog)
@@ -401,7 +411,11 @@ int main(int argc, char **argv)
 				break;
 
 			case 'l':
+#ifndef WIN32
 				logfn = optarg;
+#else
+				logfn = filter_path(optarg);
+#endif
 				break;
 
 			case 'i':
@@ -439,6 +453,9 @@ int main(int argc, char **argv)
 	if (argc >= 3) {
 		monhost = argv[0];
 		logfn = argv[1];
+#ifdef WIN32
+		logfn = filter_path(argv[1]);
+#endif
 		interval = atoi(argv[2]);
 	}
 

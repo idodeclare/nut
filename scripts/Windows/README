@@ -21,13 +21,13 @@ You will first need to setup a MinGW-w64 build environment.
 
 On Debian systems, use:
 
-	# apt-get mingw-w64
+	# apt-get install mingw-w64
 
 On Redhat systems, use:
 
 	# ???
 
-You will also need pthread and mingw regex libraries.
+You will also need pthread and mingw regex libraries. See instructions below.
 
 [NOTE]
 ================================================================================
@@ -68,7 +68,11 @@ https://fedoraproject.org/wiki/Packaging:MinGW_Old
 You can also compile it using:
 
 	$ wget http://mirrors.kernel.org/sources.redhat.com/pthreads-win32/pthreads-w32-2-8-0-release.tar.gz
+	$ tar -zxf pthreads-w32-2-8-0-release.tar.gz
+	$ cd pthreads-w32-2-8-0-release
 	$ make -f GNUmakefile "CROSS=i686-w64-mingw32-" $BUILD_FLAG GC-inlined
+	$ mkdir -p /usr/i686-w64-mingw32/pthreads/lib
+	$ mkdir -p /usr/i686-w64-mingw32/pthreads/include
 	$ cp *.dll /usr/i686-w64-mingw32/pthreads/lib/
 	$ cp *.a /usr/i686-w64-mingw32/lib/
 	$ cp pthread.h sched.h semaphore.h /usr/i686-w64-mingw32/pthreads/include

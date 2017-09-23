@@ -22,8 +22,12 @@
 #include "common.h"
 
 #include <sys/stat.h>
+#ifndef WIN32
 #include <sys/wait.h>
 #include <sys/socket.h>
+#else
+#include <wincompat.h>
+#endif
 
 #include "upsclient.h"
 #include "upsmon.h"
@@ -73,15 +77,24 @@ static	char	*certpasswd = NULL;
 static	int	certverify = 0;		/* don't verify by default */
 static	int	forcessl = 0;		/* don't require ssl by default */
 
-static	int	userfsd = 0, use_pipe = 1, pipefd[2];
+static	int	userfsd = 0, pipefd[2];
+#ifndef WIN32
+static	int	use_pipe = 1;
+#else
+	/* Do not fork in WIN32 */
+static	int	use_pipe = 0;
+static HANDLE   mutex = INVALID_HANDLE_VALUE;
+#endif
 
 static	utype_t	*firstups = NULL;
 
 static int 	opt_af = AF_UNSPEC;
 
+#ifndef WIN32
 	/* signal handling things */
 static	struct sigaction sa;
 static	sigset_t nut_upsmon_sigmask;
+#endif
 
 static void setflag(int *val, int flag)
 {
@@ -100,6 +113,7 @@ static int flag_isset(int num, int flag)
 
 static void wall(const char *text)
 {
+#ifndef WIN32
 	FILE	*wf;
 
 	wf = popen("wall", "w");
@@ -111,13 +125,82 @@ static void wall(const char *text)
 
 	fprintf(wf, "%s\n", text);
 	pclose(wf);
+#else
+	#define MESSAGE_CMD "message.exe"
+	char * command;
+
+	/* first +1 is for the space between message and text
+	   second +1 is for trailing 0
+	   +2 is for "" */
+	command = malloc (strlen(MESSAGE_CMD) + 1 + 2 + strlen(text) + 1);
+	if( command == NULL ) {
+		upslog_with_errno(LOG_NOTICE, "Not enough memory for wall");
+		return;
+	}
+
+	sprintf(command,"%s \"%s\"",MESSAGE_CMD,text);
+	if ( system(command) != 0 ) {
+		upslog_with_errno(LOG_NOTICE, "Can't invoke wall");
+	}
+	free(command);
+#endif
 } 
+
+#ifdef WIN32
+typedef struct async_notify_s {
+	char *notice;
+	int flags;
+	char *ntype;
+	char *upsname;
+	char *date; } async_notify_t;
+
+static unsigned __stdcall async_notify(LPVOID param)
+{
+	char	exec[LARGEBUF];
+	char	notice[LARGEBUF];
+
+	/* the following code is a copy of the content of the NOT WIN32 part of
+	"notify" function below */
+
+	async_notify_t *data = (async_notify_t *)param;
+
+	if (flag_isset(data->flags, NOTIFY_WALL)) {
+		snprintf(notice,LARGEBUF,"%s: %s", data->date, data->notice);
+		wall(notice);
+	}
+
+	if (flag_isset(data->flags, NOTIFY_EXEC)) {
+		if (notifycmd != NULL) {
+			snprintf(exec, sizeof(exec), "%s \"%s\"", notifycmd, data->notice);
+
+			if (data->upsname)
+				setenv("UPSNAME", data->upsname, 1);
+			else
+				setenv("UPSNAME", "", 1);
+
+			setenv("NOTIFYTYPE", data->ntype, 1);
+			if (system(exec) == -1) {
+				upslog_with_errno(LOG_ERR, "%s", __func__);
+			}
+		}
+	}
+
+	free(data->notice);
+	free(data->ntype);
+	free(data->upsname);
+	free(data->date);
+	free(data);
+	return 1;
+}
+#endif
 
 static void notify(const char *notice, int flags, const char *ntype, 
 			const char *upsname)
 {
+#ifndef WIN32
 	char	exec[LARGEBUF];
 	int	ret;
+#endif
 
 	if (flag_isset(flags, NOTIFY_IGNORE))
 		return;
@@ -125,6 +208,7 @@ static void notify(const char *notice, int flags, const char *ntype,
 	if (flag_isset(flags, NOTIFY_SYSLOG))
 		upslogx(LOG_NOTICE, "%s", notice);
 
+#ifndef WIN32
 	/* fork here so upsmon doesn't get wedged if the notifier is slow */
 	ret = fork();
 
@@ -158,6 +242,27 @@ static void notify(const char *notice, int flags, const char *ntype,
 	}
 
 	exit(EXIT_SUCCESS);
+#else
+	async_notify_t * data;
+	time_t t;
+
+	data = malloc(sizeof(async_notify_t));
+	data->notice = strdup(notice);
+	data->flags = flags;
+	data->ntype = strdup(ntype);
+	data->upsname = strdup(upsname);
+	t = time(NULL);
+	data->date = strdup(ctime(&t));
+
+	_beginthreadex(
+			NULL,	/* security FIXME */
+			0,	/* stack size */
+			async_notify,
+			(void *)data,
+			0,	/* Creation flags */
+			NULL	/* thread id */
+		      );
+#endif
 }
 
 static void do_notify(const utype_t *ups, int ntype)
@@ -437,10 +542,38 @@ static void doshutdown(void)
 	} else {
 		/* one process model = we do all the work here */
 
+#ifndef WIN32
 		if (geteuid() != 0)
 			upslogx(LOG_WARNING, "Not root, shutdown may fail");
+#endif
 
 		set_pdflag();
+
+#ifdef WIN32
+		SC_HANDLE SCManager;
+		SC_HANDLE Service;
+		SERVICE_STATUS Status;
+
+		SCManager = OpenSCManager(
+				NULL,	/* local computer */
+				NULL,	/* ServiceActive database */
+				SC_MANAGER_ALL_ACCESS); /* full access rights */
+
+		if (NULL == SCManager) {
+			upslogx(LOG_ERR, "OpenSCManager failed (%d)\n", (int)GetLastError());
+		}
+		else {
+			Service = OpenService(SCManager,SVCNAME,SERVICE_STOP);
+			if( Service == NULL ) {
+				upslogx(LOG_ERR,"OpenService  failed (%d)\n", (int)GetLastError());
+			}
+			else {
+				ControlService(Service,SERVICE_CONTROL_STOP,&Status);
+				/* Give time to the service to stop */
+				Sleep(2000);
+			}
+		}
+#endif
 
 		ret = system(shutdowncmd);
 
@@ -494,13 +627,17 @@ static void setfsd(utype_t *ups)
 
 static void set_alarm(void)
 {
+#ifndef WIN32
 	alarm(NET_TIMEOUT);
+#endif
 }
 
 static void clear_alarm(void)
 {
+#ifndef WIN32
 	signal(SIGALRM, SIG_IGN);
 	alarm(0);
+#endif
 }
 
 static int get_var(utype_t *ups, const char *var, char *buf, size_t bufsize)
@@ -1074,7 +1211,11 @@ static int parse_conf_arg(int numargs, char **arg)
 		checkmode(arg[0], powerdownflag, arg[1], reload_flag);
 
 		free(powerdownflag);
+#ifndef WIN32
 		powerdownflag = xstrdup(arg[1]);
+#else
+		powerdownflag = filter_path(arg[1]);
+#endif
 
 		if (!reload_flag)
 			upslogx(LOG_INFO, "Using power down flag file %s",
@@ -1270,11 +1411,13 @@ static void loadconfig(void)
 	pconf_finish(&ctx);		
 }
 
+#ifndef WIN32
 /* SIGPIPE handler */
 static void sigpipe(int sig)
 {
 	upsdebugx(1, "SIGPIPE: dazed and confused, but continuing...");
 }
+#endif
 
 /* SIGQUIT, SIGTERM handler */
 static void set_exit_flag(int sig)
@@ -1319,6 +1462,13 @@ static void upsmon_cleanup(void)
 	}
 
 	upscli_cleanup();
+
+#ifdef WIN32
+	if(mutex != INVALID_HANDLE_VALUE) {
+		ReleaseMutex(mutex);
+		CloseHandle(mutex);
+	}
+#endif
 }
 
 static void user_fsd(int sig)
@@ -1332,15 +1482,18 @@ static void set_reload_flag(int sig)
 	reload_flag = 1;
 }
 
+#ifndef WIN32
 /* handler for alarm when getupsvarfd times out */
 static void read_timeout(int sig)
 {
 	/* don't do anything here, just return */
 }
+#endif
 
 /* install handlers for a few signals */
 static void setup_signals(void)
 {
+#ifndef WIN32
 	sigemptyset(&nut_upsmon_sigmask);
 	sa.sa_mask = nut_upsmon_sigmask;
 	sa.sa_flags = 0;
@@ -1365,6 +1518,9 @@ static void setup_signals(void)
 
 	sa.sa_handler = set_reload_flag;
 	sigaction(SIGCMD_RELOAD, &sa, NULL);
+#else
+	pipe_create(UPSMON_PIPE_NAME);
+#endif
 }
 
 /* remember the last time the ups was not critical (OB + LB) */
@@ -1655,15 +1811,18 @@ static void help(const char *progname)
 	exit(EXIT_SUCCESS);
 }
 
+#ifndef WIN32
 static void runparent(int fd)
 {
 	int	ret;
 	char	ch;
 
+#ifndef WIN32
 	/* handling signals is the child's job */
 	signal(SIGHUP, SIG_IGN);
 	signal(SIGUSR1, SIG_IGN);
 	signal(SIGUSR2, SIG_IGN);
+#endif
 
 	ret = read(fd, &ch, 1);
 
@@ -1689,10 +1848,12 @@ static void runparent(int fd)
 	close(fd);
 	exit(EXIT_SUCCESS);
 }
+#endif
 
 /* fire up the split parent/child scheme */
 static void start_pipe(void)
 {
+#ifndef WIN32
 	int	ret;
 
 	ret = pipe(pipefd);
@@ -1714,6 +1875,7 @@ static void start_pipe(void)
 	}
 
 	close(pipefd[0]);
+#endif
 }
 
 static void delete_ups(utype_t *target)
@@ -1859,7 +2021,35 @@ static void check_parent(void)
 int main(int argc, char *argv[])  
 {
 	const char	*prog = xbasename(argv[0]);
-	int	i, cmd = 0, checking_flag = 0;
+
+#ifdef WIN32
+	HANDLE		handles[MAXIMUM_WAIT_OBJECTS];
+	int		maxhandle = 0;
+	pipe_conn_t	*conn;
+
+	/* remove trailing .exe */
+	char * drv_name;
+	drv_name = (char *)xbasename(argv[0]);
+	char * name = strrchr(drv_name,'.');
+	if( name != NULL ) {
+		if(strcasecmp(name, ".exe") == 0 ) {
+			prog = strdup(drv_name);
+			char * t = strrchr(prog,'.');
+			*t = 0;
+		}
+	}
+	else {
+		prog = drv_name;
+	}
+#endif
+
+	int	i, checking_flag = 0;
+#ifndef WIN32
+	int cmd = 0;
+#else
+	const char * cmd = NULL;
+	DWORD ret;
+#endif
 
 	printf("Network UPS Tools %s %s\n", prog, UPS_VERSION);
 
@@ -1920,14 +2110,29 @@ int main(int argc, char *argv[])
 	}
 
 	if (cmd) {
+#ifndef WIN32
 		sendsignal(prog, cmd);
+#else
+		sendsignal(UPSMON_PIPE_NAME, cmd);
+#endif
 		exit(EXIT_SUCCESS);
 	}
 
 	/* otherwise, we are being asked to start.
 	 * so check if a previous instance is running by sending signal '0'
 	 * (Ie 'kill <pid> 0') */
+#ifndef WIN32
 	if (sendsignal(prog, 0) == 0) {
+#else
+	mutex = CreateMutex(NULL,TRUE,UPSMON_PIPE_NAME);
+	if(mutex == NULL ) {
+		if( GetLastError() != ERROR_ACCESS_DENIED ) {
+			fatalx(EXIT_FAILURE, "Can not create mutex %s : %d.\n",UPSMON_PIPE_NAME,(int)GetLastError());
+		}
+	}
+
+	if (GetLastError() == ERROR_ALREADY_EXISTS || GetLastError() == ERROR_ACCESS_DENIED) {
+#endif
 		printf("Fatal error: A previous upsmon instance is already running!\n");
 		printf("Either stop the previous instance first, or use the 'reload' command.\n");
 		exit(EXIT_FAILURE);
@@ -1980,7 +2185,9 @@ int main(int argc, char *argv[])
 
 		become_user(new_uid);
 	} else {
+#ifndef WIN32
 		upslogx(LOG_INFO, "Warning: running as one big root process by request (upsmon -p)");
+#endif
 		
 		writepid(prog);
 	}
@@ -2015,10 +2222,70 @@ int main(int argc, char *argv[])
 		if (use_pipe)
 			check_parent();
 
+#ifndef WIN32
 		/* reap children that have exited */
 		waitpid(-1, NULL, WNOHANG);
 
 		sleep(sleepval);
+#else
+		maxhandle = 0;
+		memset(&handles,0,sizeof(handles));
+
+		/* Wait on the read IO of each connections */
+		for (conn = pipe_connhead; conn; conn = conn->next) {
+			handles[maxhandle] = conn->overlapped.hEvent;
+			maxhandle++;
+		}
+		/* Add the new pipe connected event */
+		handles[maxhandle] = pipe_connection_overlapped.hEvent;
+		maxhandle++;
+
+		ret = WaitForMultipleObjects(maxhandle,handles,FALSE,sleepval*1000);
+
+		if (ret == WAIT_FAILED) {
+			upslogx(LOG_ERR, "Wait failed");
+			exit(EXIT_FAILURE);
+		}
+
+		if (ret == WAIT_TIMEOUT) {
+			continue;
+		}
+
+		/* Retrieve the signaled connection */
+		for(conn = pipe_connhead; conn != NULL; conn = conn->next) {
+			if( conn->overlapped.hEvent == handles[ret-WAIT_OBJECT_0]) {
+				break;
+			}
+		}
+		/* a new pipe connection has been signaled */
+		if (handles[ret] == pipe_connection_overlapped.hEvent) {
+			pipe_connect();
+		}
+		/* one of the read event handle has been signaled */
+		else {
+			if( conn != NULL) {
+				if ( pipe_ready(conn) ) {
+					if (!strncmp(conn->buf, SIGCMD_FSD, sizeof(SIGCMD_FSD))) {
+						user_fsd(1);
+					}
+
+					else if (!strncmp(conn->buf, SIGCMD_RELOAD, sizeof(SIGCMD_RELOAD))) {
+						set_reload_flag(1);
+					}
+
+					else if (!strncmp(conn->buf, SIGCMD_STOP, sizeof(SIGCMD_STOP))) {
+						set_exit_flag(1);
+					}
+
+					else {
+						upslogx(LOG_ERR,"Unknown signal");
+					}
+
+					pipe_disconnect(conn);
+				}
+			}
+		}
+#endif
 	}
 
 	upslogx(LOG_INFO, "Signal %d: exiting", exit_flag);

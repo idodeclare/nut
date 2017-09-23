@@ -32,6 +32,9 @@
 #include "common.h" /* for xmalloc, upsdebugx prototypes */
 #include "usb-common.h"
 #include "libusb.h"
+#ifdef WIN32
+#include "wincompat.h"
+#endif
 
 #define USB_DRIVER_NAME		"USB communication driver"
 #define USB_DRIVER_VERSION	"0.33"
@@ -281,6 +284,9 @@ static int libusb_open(usb_dev_handle **udevp, USBDevice_t *curDevice, USBDevice
 				fatalx(EXIT_FAILURE, "Can't claim USB device [%04x:%04x]: %s", curDevice->VendorID, curDevice->ProductID, usb_strerror());
 			}
 #else
+#ifdef WIN32
+			usb_set_configuration(udev,1);
+#endif
 			if (usb_claim_interface(udev, 0) < 0) {
 				fatalx(EXIT_FAILURE, "Can't claim USB device [%04x:%04x]: %s", curDevice->VendorID, curDevice->ProductID, usb_strerror());
 			}
@@ -439,17 +445,20 @@ static int libusb_strerror(const int ret, const char *desc)
 	case -ENOSYS:	/* Function not implemented */
 		upslogx(LOG_DEBUG, "%s: %s", desc, usb_strerror());
 		return ret;
-
 	case -ETIMEDOUT:	/* Connection timed out */
 		upsdebugx(2, "%s: Connection timed out", desc);
 		return 0;
 
+/* libusb win32 does not know EPROTO and EOVERFLOW, it only returns EIO for any
+   IO errors */
+#ifndef WIN32
 	case -EOVERFLOW:	/* Value too large for defined data type */
 #ifdef EPROTO
 	case -EPROTO:	/* Protocol error */
 #endif
 		upsdebugx(2, "%s: %s", desc, usb_strerror());
 		return 0;
+#endif
 
 	default:	/* Undetermined, log only */
 		upslogx(LOG_DEBUG, "%s: %s", desc, usb_strerror());
@@ -477,6 +486,10 @@ static int libusb_get_report(usb_dev_handle *udev, int ReportId, unsigned char *
 		ReportId+(0x03<<8), /* HID_REPORT_TYPE_FEATURE */
 		0, raw_buf, ReportSize, USB_TIMEOUT);
 
+#ifdef WIN32
+	errno = -ret;
+#endif
+
 	/* Ignore "protocol stall" (for unsupported request) on control endpoint */
 	if (ret == -EPIPE) {
 		return 0;
@@ -499,6 +512,10 @@ static int libusb_set_report(usb_dev_handle *udev, int ReportId, unsigned char *
 		ReportId+(0x03<<8), /* HID_REPORT_TYPE_FEATURE */
 		0, raw_buf, ReportSize, USB_TIMEOUT);
 
+#ifdef WIN32
+	errno = -ret;
+#endif
+
 	/* Ignore "protocol stall" (for unsupported request) on control endpoint */
 	if (ret == -EPIPE) {
 		return 0;
@@ -517,6 +534,10 @@ static int libusb_get_string(usb_dev_handle *udev, int StringIdx, char *buf, siz
 
 	ret = usb_get_string_simple(udev, StringIdx, buf, buflen);
 
+#ifdef WIN32
+	errno = -ret;
+#endif
+
 	return libusb_strerror(ret, __func__);
 }
 
@@ -531,6 +552,9 @@ static int libusb_get_interrupt(usb_dev_handle *udev, unsigned char *buf, int bu
 	/* FIXME: hardcoded interrupt EP => need to get EP descr for IF descr */
 	ret = usb_interrupt_read(udev, 0x81, (char *)buf, bufsize, timeout);
 
+#ifdef WIN32
+	errno = -ret;
+#endif
 	/* Clear stall condition */
 	if (ret == -EPIPE) {
 		ret = usb_clear_halt(udev, 0x81);

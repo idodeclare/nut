@@ -374,14 +374,17 @@ int riello_command(uint8_t *cmd, uint8_t *buf, uint16_t length, uint16_t buflen)
 		break;
 
 	case -ETIMEDOUT:	/* Connection timed out */
-		upsdebugx (3, "riello_command err: Resource temporarily unavailable");
-
-
-	case -EOVERFLOW:	/* Value too large for defined data type */
+#ifndef WIN32
+/*
+ * libusb win32 does not know EPROTO and EOVERFLOW, it only returns EIO for any
+ * IO errors
+ */
+	case -EOVERFLOW:        /* Value too large for defined data type */
 #ifdef EPROTO
-	case -EPROTO:		/* Protocol error */
+	case -EPROTO:           /* Protocol error */
 #endif
 		break;
+#endif
 	default:
 		break;
 	}

@@ -41,6 +41,11 @@ int nutscan_load_avahi_library(const char *libname_path);
 int nutscan_load_ipmi_library(const char *libname_path);
 int nutscan_load_upsclient_library(const char *libname_path);
 
+#ifdef WIN32
+/* Stub for libupsclient */
+void do_upsconf_args(char *confupsname, char *var, char *val) {;};
+#endif
+
 void nutscan_init(void)
 {
 	char *libname = NULL;

@@ -1,3 +1,4 @@
 *
 !/*.[ch]
 !/Makefile.am
+*.exe

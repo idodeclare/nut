@@ -35,11 +35,11 @@ static const char *dl_error = NULL;
 
 static int (*nut_upscli_splitaddr)(const char *buf,char **hostname, int *port);
 static int (*nut_upscli_tryconnect)(UPSCONN_t *ups, const char *host, int port,
-					int flags,struct timeval * timeout);
+		int flags,struct timeval * timeout);
 static int (*nut_upscli_list_start)(UPSCONN_t *ups, unsigned int numq,
-					const char **query);
+		const char **query);
 static int (*nut_upscli_list_next)(UPSCONN_t *ups, unsigned int numq,
-			const char **query,unsigned int *numa, char ***answer);
+		const char **query,unsigned int *numa, char ***answer);
 static int (*nut_upscli_disconnect)(UPSCONN_t *ups);
 
 static nutscan_device_t * dev_ret = NULL;
@@ -76,8 +76,8 @@ int nutscan_load_upsclient_library(const char *libname_path)
 
 	dl_handle = lt_dlopen(libname_path);
 	if (!dl_handle) {
-			dl_error = lt_dlerror();
-			goto err;
+                dl_error = lt_dlerror();
+                goto err;
 	}
 
 	lt_dlerror();      /* Clear any existing error */
@@ -212,10 +212,17 @@ nutscan_device_t * nutscan_scan_nut(const char* startIP, const char* stopIP, con
 	char * ip_str = NULL;
 	char * ip_dest = NULL;
 	char buf[SMALLBUF];
-	struct sigaction oldact;
-	int change_action_handler = 0;
 	int i;
+#ifndef WIN32
+	struct sigaction oldact;
+#endif
 	struct scan_nut_arg *nut_arg;
+#ifdef WIN32
+	WSADATA WSAdata;
+	WSAStartup(2,&WSAdata);
+	atexit((void(*)(void))WSACleanup);
+#endif
+
 #ifdef HAVE_PTHREAD
 	pthread_t thread;
 	pthread_t * thread_array = NULL;
@@ -228,6 +235,8 @@ nutscan_device_t * nutscan_scan_nut(const char* startIP, const char* stopIP, con
                 return NULL;
         }
 
+#ifndef WIN32
+	int change_action_handler = 0;
 	/* Ignore SIGPIPE if the caller hasn't set a handler for it yet */
 	if( sigaction(SIGPIPE, NULL, &oldact) == 0 ) {
 		if( oldact.sa_handler == SIG_DFL ) {
@@ -235,6 +244,7 @@ nutscan_device_t * nutscan_scan_nut(const char* startIP, const char* stopIP, con
 			signal(SIGPIPE,SIG_IGN);
 		}
 	}
+#endif
 
 	ip_str = nutscan_ip_iter_init(&ip,startIP,stopIP);
 
@@ -290,9 +300,11 @@ nutscan_device_t * nutscan_scan_nut(const char* startIP, const char* stopIP, con
 	free(thread_array);
 #endif
 
+#ifndef WIN32
 	if(change_action_handler) {
 		signal(SIGPIPE,SIG_DFL);
 	}
+#endif
 
 	return nutscan_rewind_device(dev_ret);
 }

@@ -28,8 +28,8 @@
 #include <stdlib.h>
 #include "nut_platform.h"
 #include "common.h"
-
 #ifdef WIN32
+#include "wincompat.h"
 /* Windows: all serial port names start with "COM" */
 #define SERIAL_PORT_PREFIX "COM"
 #else

@@ -61,6 +61,8 @@ if test -z "${nut_have_libusb_seen}"; then
 	], [])
 	AC_MSG_RESULT([${LIBS}])
 
+	AC_SEARCH_LIBS(regcomp, regex)
+
 	dnl check if libusb is usable
 	AC_CHECK_HEADERS(usb.h, [nut_have_libusb=yes], [nut_have_libusb=no], [AC_INCLUDES_DEFAULT])
 	AC_CHECK_FUNCS(usb_init, [], [nut_have_libusb=no])

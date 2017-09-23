@@ -293,8 +293,10 @@ static void dopr (char *buffer, size_t maxlen, const char *format, va_list args)
 	if (cflags == DP_C_SHORT) 
 #ifdef C89PLUS
 	  value = (short int)va_arg (args, int);
-#else
+#elif defined(NUT_PLATFORM_MS_WINDOWS)
 	  value = va_arg (args, short int);
+#else
+	  value = va_arg (args, int);
 #endif
 	else if (cflags == DP_C_LONG)
 	  value = va_arg (args, long int);
@@ -309,6 +311,8 @@ static void dopr (char *buffer, size_t maxlen, const char *format, va_list args)
 	if (cflags == DP_C_SHORT)
 #ifdef C89PLUS
 	  value = (unsigned short int)va_arg (args, unsigned int);
+#elif defined(NUT_PLATFORM_MS_WINDOWS)
+	  value = va_arg (args, int);
 #else
 	  value = va_arg (args, unsigned short int);
 #endif
@@ -325,6 +329,8 @@ static void dopr (char *buffer, size_t maxlen, const char *format, va_list args)
 	if (cflags == DP_C_SHORT)
 #ifdef C89PLUS
 	  value = (unsigned short int)va_arg (args, unsigned int);
+#elif defined(NUT_PLATFORM_MS_WINDOWS)
+	  value = va_arg (args, int);
 #else
 	  value = va_arg (args, unsigned short int);
 #endif
@@ -343,6 +349,8 @@ static void dopr (char *buffer, size_t maxlen, const char *format, va_list args)
 	if (cflags == DP_C_SHORT)
 #ifdef C89PLUS
 	  value = (unsigned short int)va_arg (args, unsigned int);
+#elif defined(NUT_PLATFORM_MS_WINDOWS)
+	  value = va_arg (args, int);
 #else
 	  value = va_arg (args, unsigned short int);
 #endif
@@ -587,7 +595,7 @@ static LDOUBLE abs_val (LDOUBLE value)
 }
 #endif
 
-#ifndef HAVE_FCVT
+#if ! defined(HAVE_FCVT) && ! defined(NUT_PLATFORM_MS_WINDOWS)
 /* The two routines that may get defined below are only used if we also don't
  * have a fcvt() in the system. Defining and not using the routines may be a
  * warning (fatal with -Werror), so we hide them here. */
@@ -619,7 +627,7 @@ static long round (LDOUBLE value)
   return intpart;
 }
 # endif
-#endif /* HAVE_FCVT */
+#endif /* ! HAVE_FCVT && ! NUT_PLATFORM_MS_WINDOWS */
 
 static void fmtfp (char *buffer, size_t *currlen, size_t maxlen,
 		   LDOUBLE fvalue, int min, int max, int flags)
@@ -674,6 +682,10 @@ static void fmtfp (char *buffer, size_t *currlen, size_t maxlen,
 #endif
 
 #ifndef HAVE_FCVT
+  long fracpart;
+  long intpart;
+  int caps = 0;
+
   intpart = (long)ufvalue;
 
   /* 

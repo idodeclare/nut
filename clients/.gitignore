@@ -7,3 +7,5 @@
 /upsmon
 /upsrw
 /upssched
+.libs
+*.exe

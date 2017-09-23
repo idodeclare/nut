@@ -99,6 +99,7 @@ upsdrvctl_LDADD = $(LDADD_COMMON)
 # serial drivers: all of them use standard LDADD and CFLAGS
 al175_SOURCES = al175.c
 apcsmart_SOURCES = apcsmart.c apcsmart_tabs.c
+apcsmart_LDADD = $(LDADD) $(LIBREGEX_LIBS)
 apcsmart_old_SOURCES = apcsmart-old.c
 bcmxcp_SOURCES = bcmxcp.c bcmxcp_ser.c
 bcmxcp_LDADD = $(LDADD) -lm
@@ -279,8 +280,8 @@ dist_noinst_HEADERS = apc-mib.h apc-hid.h baytech-mib.h bcmxcp.h	\
  nutdrv_qx_voltronic.h nutdrv_qx_voltronic-qs.h nutdrv_qx_voltronic-qs-hex.h nutdrv_qx_zinto.h \
  xppc-mib.h huawei-mib.h eaton-ats16-mib.h apc-ats-mib.h raritan-px2-mib.h eaton-ats30-mib.h \
  apc-pdu-mib.h eaton-pdu-genesis2-mib.h eaton-pdu-marlin-mib.h \
- eaton-pdu-pulizzi-mib.h eaton-pdu-revelation-mib.h
-
+ eaton-pdu-pulizzi-mib.h eaton-pdu-revelation-mib.h \
+ win_shut_compat.h
 
 # Define a dummy library so that Automake builds rules for the
 # corresponding object files.  This library is not actually built,

@@ -413,6 +413,13 @@ usb_dev_handle *nutusb_open(const char *port)
 			upsdebugx(1, "device %s opened successfully", usb_device(dev_h)->filename);
 			errout = 0;
 
+#ifdef WIN32
+			if (usb_set_configuration(dev_h, 1) < 0)
+			{
+				upsdebugx(1, "Can't set POWERWARE USB configuration: %s", usb_strerror());
+				errout = 1;
+			}
+#endif
 			if (usb_claim_interface(dev_h, 0) < 0)
 			{
 				upsdebugx(1, "Can't claim POWERWARE USB interface: %s", usb_strerror());
